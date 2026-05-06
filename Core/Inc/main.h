@@ -57,24 +57,18 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define SCK_Pin GPIO_PIN_5
-#define SCK_GPIO_Port GPIOA
+#define LORA_NSS_Pin GPIO_PIN_4
+#define LORA_NSS_GPIO_Port GPIOA
+#define LORA_SCK_Pin GPIO_PIN_5
+#define LORA_SCK_GPIO_Port GPIOA
 #define MOSI_Pin GPIO_PIN_6
 #define MOSI_GPIO_Port GPIOA
 #define MISO_Pin GPIO_PIN_7
 #define MISO_GPIO_Port GPIOA
+#define LORA_RST_Pin GPIO_PIN_0
+#define LORA_RST_GPIO_Port GPIOB
 #define LORA_DIO0_Pin GPIO_PIN_1
 #define LORA_DIO0_GPIO_Port GPIOB
-#define GREEN_LED_Pin GPIO_PIN_12
-#define GREEN_LED_GPIO_Port GPIOB
-#define RED_LED_Pin GPIO_PIN_13
-#define RED_LED_GPIO_Port GPIOB
-#define GREEN_LED2_Pin GPIO_PIN_14
-#define GREEN_LED2_GPIO_Port GPIOB
-#define RED_LED2_Pin GPIO_PIN_15
-#define RED_LED2_GPIO_Port GPIOB
-#define Button_Pin GPIO_PIN_8
-#define Button_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
 

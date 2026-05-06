@@ -2,18 +2,19 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Valdymo pultelio pagrindine programa
+  * @brief          : Krovinio paleidimo sistemos pagrindine programa
   ******************************************************************************
   */
 /* USER CODE END Header */
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "gpio.h"
+//#include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdint.h>
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -40,46 +41,42 @@
 #define LORA_RST_PORT      GPIOB
 #define LORA_RST_PIN       GPIO_PIN_0
 
-/* Vartotojo mygtukas */
-#define BUTTON_PORT        GPIOA
-#define BUTTON_PIN         GPIO_PIN_8
-
-/* LED indikatoriai */
-#define LED_GREEN_PORT     GPIOB
-#define LED_GREEN_PIN      GPIO_PIN_12
-
-#define LED_RED_PORT       GPIOB
-#define LED_RED_PIN        GPIO_PIN_13
-
-#define LED_GREEN2_PORT    GPIOB
-#define LED_GREEN2_PIN     GPIO_PIN_14
-
-#define LED_RED2_PORT      GPIOB
-#define LED_RED2_PIN       GPIO_PIN_15
+/* Elektromagneto valdymas */
+#define GATE_PORT          GPIOA
+#define GATE_PIN           GPIO_PIN_2
 
 /* LoRa registrai */
-#define REG_FIFO           0x00
-#define REG_OP_MODE        0x01
-#define REG_FRF_MSB        0x06
-#define REG_FRF_MID        0x07
-#define REG_FRF_LSB        0x08
-#define REG_FIFO_ADDR_PTR  0x0D
-#define REG_FIFO_TX_BASE   0x0E
-#define REG_FIFO_RX_BASE   0x0F
-#define REG_IRQ_FLAGS      0x12
-#define REG_PAYLOAD_LENGTH 0x22
-#define REG_MODEM_CONFIG1  0x1D
-#define REG_MODEM_CONFIG2  0x1E
-#define REG_SYNC_WORD      0x39
-#define REG_VERSION        0x42
+#define REG_FIFO                 0x00
+#define REG_OP_MODE              0x01
+#define REG_FRF_MSB              0x06
+#define REG_FRF_MID              0x07
+#define REG_FRF_LSB              0x08
+#define REG_FIFO_ADDR_PTR        0x0D
+#define REG_FIFO_TX_BASE         0x0E
+#define REG_FIFO_RX_BASE         0x0F
+#define REG_FIFO_RX_CURRENT_ADDR 0x10
+#define REG_IRQ_FLAGS            0x12
+#define REG_RX_NB_BYTES          0x13
+#define REG_MODEM_CONFIG1        0x1D
+#define REG_MODEM_CONFIG2        0x1E
+#define REG_SYNC_WORD            0x39
+#define REG_VERSION              0x42
 
 /* LoRa režimai */
-#define MODE_SLEEP         0x80
-#define MODE_STDBY         0x81
-#define MODE_TX            0x83
+#define MODE_SLEEP               0x80
+#define MODE_STDBY               0x81
+#define MODE_RX_CONTINUOUS       0x85
 
-/* Komanda krovinio paleidimo sistemai */
-#define RELEASE_COMMAND    "BAKIS_OK"
+/* IRQ veliavos */
+#define IRQ_RX_DONE              0x40
+#define IRQ_PAYLOAD_CRC_ERROR    0x20
+
+/* Priimama komanda */
+#define RELEASE_COMMAND          "BAKIS_OK"
+#define RELEASE_COMMAND_LENGTH   8
+
+/* Elektromagneto aktyvavimo trukme */
+#define MAGNET_ACTIVE_TIME_MS    1000
 
 /* USER CODE END PD */
 
@@ -92,6 +89,7 @@
 /* USER CODE BEGIN PV */
 
 uint8_t lora_ok = 0;
+uint8_t rx_buffer[32];
 
 /* USER CODE END PV */
 
@@ -103,14 +101,14 @@ void SystemClock_Config(void);
 uint8_t SW_SPI_Transfer(uint8_t data);
 uint8_t LoRa_ReadReg(uint8_t addr);
 void LoRa_WriteReg(uint8_t addr, uint8_t value);
+
 void LoRa_Reset(void);
 uint8_t LoRa_Init(void);
-uint8_t LoRa_Send(uint8_t *data, uint8_t size);
+void LoRa_SetRxMode(void);
+uint8_t LoRa_Receive(uint8_t *buffer, uint8_t max_size);
 
-void LEDs_All_Off(void);
-void LEDs_Idle_State(void);
-void LEDs_LoRa_Error(void);
-void LEDs_Command_Sent(void);
+uint8_t Sensors_Are_Allowed(void);
+void Electromagnet_Activate(void);
 
 /* USER CODE END PFP */
 
@@ -219,11 +217,11 @@ uint8_t LoRa_Init(void)
     }
 
     /*
-      LoRa modulio konfiguracija:
-      - LoRa režimas
+      LoRa modulio konfiguracija turi sutapti su valdymo pultelio nustatymais:
       - 433 MHz dažnis
-      - nustatyti TX/RX FIFO adresai
-      - nustatyti moduliacijos parametrai
+      - BW = 125 kHz
+      - SF = 7
+      - CR = 4/5
       - SyncWord = 0x12
     */
 
@@ -251,7 +249,7 @@ uint8_t LoRa_Init(void)
     LoRa_WriteReg(REG_MODEM_CONFIG1, 0x72);
     LoRa_WriteReg(REG_MODEM_CONFIG2, 0x70);
 
-    /* SyncWord turi sutapti su krovinio paleidimo sistemos LoRa nustatymu */
+    /* SyncWord turi sutapti su pultelio LoRa nustatymu */
     LoRa_WriteReg(REG_SYNC_WORD, 0x12);
 
     /* FIFO pradžios adresai */
@@ -261,114 +259,107 @@ uint8_t LoRa_Init(void)
     /* Išvalomi pertraukimo požymiai */
     LoRa_WriteReg(REG_IRQ_FLAGS, 0xFF);
 
-    LoRa_WriteReg(REG_OP_MODE, MODE_STDBY);
-    HAL_Delay(10);
+    LoRa_SetRxMode();
 
     return 1;
 }
 
 /**
-  * @brief Išsiuncia duomenu paketa per LoRa moduli.
-  * @param data Duomenu masyvas.
-  * @param size Duomenu kiekis baitais.
-  * @retval 1 - išsiusta sekmingai, 0 - siuntimo klaida.
+  * @brief Perjungia LoRa moduli i nuolatini priemimo režima.
+  * @retval None
   */
-uint8_t LoRa_Send(uint8_t *data, uint8_t size)
+void LoRa_SetRxMode(void)
 {
-    uint32_t timeout = 0;
-
     LoRa_WriteReg(REG_OP_MODE, MODE_STDBY);
-    LoRa_WriteReg(REG_FIFO_ADDR_PTR, 0x00);
+    HAL_Delay(5);
 
-    for (uint8_t i = 0; i < size; i++)
+    LoRa_WriteReg(REG_FIFO_ADDR_PTR, 0x00);
+    LoRa_WriteReg(REG_IRQ_FLAGS, 0xFF);
+
+    LoRa_WriteReg(REG_OP_MODE, MODE_RX_CONTINUOUS);
+    HAL_Delay(5);
+}
+
+/**
+  * @brief Tikrina, ar gautas LoRa paketas, ir ji nuskaito.
+  * @param buffer Buferis priimtiems duomenims.
+  * @param max_size Maksimalus buferio dydis.
+  * @retval Priimtu baitu skaicius. Jei duomenu nera - 0.
+  */
+uint8_t LoRa_Receive(uint8_t *buffer, uint8_t max_size)
+{
+    uint8_t irq_flags = 0;
+    uint8_t packet_size = 0;
+    uint8_t current_addr = 0;
+
+    irq_flags = LoRa_ReadReg(REG_IRQ_FLAGS);
+
+    if ((irq_flags & IRQ_RX_DONE) == 0)
     {
-        LoRa_WriteReg(REG_FIFO, data[i]);
+        return 0;
     }
 
-    LoRa_WriteReg(REG_PAYLOAD_LENGTH, size);
+    /* Jeigu ivyko CRC klaida, paketas ignoruojamas */
+    if (irq_flags & IRQ_PAYLOAD_CRC_ERROR)
+    {
+        LoRa_WriteReg(REG_IRQ_FLAGS, 0xFF);
+        LoRa_SetRxMode();
+        return 0;
+    }
+
+    packet_size = LoRa_ReadReg(REG_RX_NB_BYTES);
+    current_addr = LoRa_ReadReg(REG_FIFO_RX_CURRENT_ADDR);
+
+    if (packet_size > max_size)
+    {
+        packet_size = max_size;
+    }
+
+    LoRa_WriteReg(REG_FIFO_ADDR_PTR, current_addr);
+
+    for (uint8_t i = 0; i < packet_size; i++)
+    {
+        buffer[i] = LoRa_ReadReg(REG_FIFO);
+    }
 
     /* Išvalomi IRQ požymiai */
     LoRa_WriteReg(REG_IRQ_FLAGS, 0xFF);
 
-    /* Ijungiamas siuntimo režimas */
-    LoRa_WriteReg(REG_OP_MODE, MODE_TX);
+    /* Gražinamas RX režimas */
+    LoRa_SetRxMode();
 
+    return packet_size;
+}
+
+/**
+  * @brief Patikrina, ar jutikliu duomenys leidžia paleisti krovini.
+  * @retval 1 - paleidimas leidžiamas, 0 - paleidimas blokuojamas.
+  */
+uint8_t Sensors_Are_Allowed(void)
+{
     /*
-      Laukiama TxDone požymio.
-      Naudojamas timeout, kad programa neužstrigtu, jei modulis neatsakytu.
+      Šioje vietoje veliau gali buti irašomas realus jutikliu tikrinimas.
+
+      Pavyzdžiui:
+      - aukšcio jutiklio reikšmes patikra;
+      - padeties arba pasvirimo kampo patikra;
+      - kitu saugos salygu tikrinimas.
+
+      Šiame galutiniame baziniame variante laikoma, kad salygos tenkinamos.
     */
-    timeout = HAL_GetTick();
-
-    while ((LoRa_ReadReg(REG_IRQ_FLAGS) & 0x08) == 0)
-    {
-        if ((HAL_GetTick() - timeout) > 3000)
-        {
-            LoRa_WriteReg(REG_OP_MODE, MODE_STDBY);
-            return 0;
-        }
-    }
-
-    /* Išvalomas TxDone požymis */
-    LoRa_WriteReg(REG_IRQ_FLAGS, 0x08);
-
-    /* Grižtama i budejimo režima */
-    LoRa_WriteReg(REG_OP_MODE, MODE_STDBY);
 
     return 1;
 }
 
 /**
-  * @brief Išjungia visus LED indikatorius.
+  * @brief Aktyvuoja elektromagneta nustatytam laikui.
   * @retval None
   */
-void LEDs_All_Off(void)
+void Electromagnet_Activate(void)
 {
-    HAL_GPIO_WritePin(LED_GREEN_PORT, LED_GREEN_PIN, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(LED_RED_PORT, LED_RED_PIN, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(LED_GREEN2_PORT, LED_GREEN2_PIN, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(LED_RED2_PORT, LED_RED2_PIN, GPIO_PIN_RESET);
-}
-
-/**
-  * @brief Pradine pultelio busena, kai LoRa modulis veikia.
-  * @retval None
-  */
-void LEDs_Idle_State(void)
-{
-    /*
-      PB12 - žalias LED: LoRa modulis veikia
-      PB14 - žalias LED: sistema paruošta komandai
-    */
-    HAL_GPIO_WritePin(LED_GREEN_PORT, LED_GREEN_PIN, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(LED_RED_PORT, LED_RED_PIN, GPIO_PIN_RESET);
-
-    HAL_GPIO_WritePin(LED_GREEN2_PORT, LED_GREEN2_PIN, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(LED_RED2_PORT, LED_RED2_PIN, GPIO_PIN_RESET);
-}
-
-/**
-  * @brief LED busena, kai LoRa modulis neinicializuotas.
-  * @retval None
-  */
-void LEDs_LoRa_Error(void)
-{
-    HAL_GPIO_WritePin(LED_GREEN_PORT, LED_GREEN_PIN, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(LED_RED_PORT, LED_RED_PIN, GPIO_PIN_SET);
-
-    HAL_GPIO_WritePin(LED_GREEN2_PORT, LED_GREEN2_PIN, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(LED_RED2_PORT, LED_RED2_PIN, GPIO_PIN_SET);
-}
-
-/**
-  * @brief LED busena po sekmingo komandos išsiuntimo.
-  * @retval None
-  */
-void LEDs_Command_Sent(void)
-{
-    HAL_GPIO_WritePin(LED_GREEN_PORT, LED_GREEN_PIN, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(LED_RED_PORT, LED_RED_PIN, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(LED_GREEN2_PORT, LED_GREEN2_PIN, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(LED_RED2_PORT, LED_RED2_PIN, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GATE_PORT, GATE_PIN, GPIO_PIN_SET);
+    HAL_Delay(MAGNET_ACTIVE_TIME_MS);
+    HAL_GPIO_WritePin(GATE_PORT, GATE_PIN, GPIO_PIN_RESET);
 }
 
 /* USER CODE END 0 */
@@ -397,22 +388,20 @@ int main(void)
 
   /* USER CODE END SysInit */
 
-  MX_GPIO_Init();
+ // MX_GPIO_Init();
 
   /* USER CODE BEGIN 2 */
 
-  LEDs_All_Off();
+  /* Užtikrinama, kad elektromagnetas paleidimo metu butu išjungtas */
+  HAL_GPIO_WritePin(GATE_PORT, GATE_PIN, GPIO_PIN_RESET);
 
   lora_ok = LoRa_Init();
 
-  if (lora_ok)
-  {
-      LEDs_Idle_State();
-  }
-  else
-  {
-      LEDs_LoRa_Error();
-  }
+  /*
+    Jeigu LoRa modulis inicializuotas sekmingai, sistema pradeda laukti
+    komandos iš valdymo pultelio. Jeigu modulis neatsako, programa cikle
+    bandys inicializuoti ji iš naujo.
+  */
 
   /* USER CODE END 2 */
 
@@ -422,46 +411,29 @@ int main(void)
   {
       if (lora_ok)
       {
-          LEDs_Idle_State();
+          uint8_t received_size = 0;
 
-          /*
-            Mygtukas PA8 prijungtas su išoriniu pull-up rezistoriumi.
-            Todel:
-            - nepaspaustas = loginis 1
-            - paspaustas = loginis 0
-          */
-          if (HAL_GPIO_ReadPin(BUTTON_PORT, BUTTON_PIN) == GPIO_PIN_RESET)
+          received_size = LoRa_Receive(rx_buffer, sizeof(rx_buffer));
+
+          if (received_size > 0)
           {
-              HAL_Delay(50);
-
-              if (HAL_GPIO_ReadPin(BUTTON_PORT, BUTTON_PIN) == GPIO_PIN_RESET)
+              /*
+                Tikrinama, ar gautas paketas atitinka krovinio paleidimo komanda.
+                Komanda turi sutapti su pultelyje siunciama reikšme: "BAKIS_OK".
+              */
+              if (received_size == RELEASE_COMMAND_LENGTH)
               {
-                  uint8_t msg[] = RELEASE_COMMAND;
-
-                  LEDs_All_Off();
-                  HAL_Delay(300);
-
-                  if (LoRa_Send(msg, sizeof(msg) - 1))
+                  if (memcmp(rx_buffer, RELEASE_COMMAND, RELEASE_COMMAND_LENGTH) == 0)
                   {
-                      LEDs_Command_Sent();
-                      HAL_Delay(2000);
+                      /*
+                        Krovinys paleidžiamas tik tuo atveju, jeigu jutikliu
+                        duomenys patenka i leistinas ribas.
+                      */
+                      if (Sensors_Are_Allowed())
+                      {
+                          Electromagnet_Activate();
+                      }
                   }
-                  else
-                  {
-                      LEDs_LoRa_Error();
-                      HAL_Delay(1000);
-                  }
-
-                  /*
-                    Laukiama, kol vartotojas atleis mygtuka.
-                    Taip išvengiama pakartotinio komandos siuntimo.
-                  */
-                  while (HAL_GPIO_ReadPin(BUTTON_PORT, BUTTON_PIN) == GPIO_PIN_RESET)
-                  {
-                      HAL_Delay(10);
-                  }
-
-                  HAL_Delay(100);
               }
           }
       }
@@ -471,18 +443,13 @@ int main(void)
             Jei LoRa modulis neinicializuotas, periodiškai bandoma
             inicializuoti ji iš naujo.
           */
-          LEDs_LoRa_Error();
+          HAL_GPIO_WritePin(GATE_PORT, GATE_PIN, GPIO_PIN_RESET);
           HAL_Delay(1000);
 
           lora_ok = LoRa_Init();
-
-          if (lora_ok)
-          {
-              LEDs_Idle_State();
-          }
       }
 
-      HAL_Delay(50);
+      HAL_Delay(10);
 
     /* USER CODE END WHILE */
 
@@ -545,12 +512,12 @@ void SystemClock_Config(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
+
   __disable_irq();
 
   while (1)
   {
-      HAL_GPIO_TogglePin(LED_RED_PORT, LED_RED_PIN);
-      HAL_Delay(300);
+      HAL_GPIO_WritePin(GATE_PORT, GATE_PIN, GPIO_PIN_RESET);
   }
 
   /* USER CODE END Error_Handler_Debug */
