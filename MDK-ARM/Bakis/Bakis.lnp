@@ -1,0 +1,24 @@
+--cpu Cortex-M3
+"bakis\startup_stm32f103xb.o"
+"bakis\main.o"
+"bakis\gpio.o"
+"bakis\stm32f1xx_it.o"
+"bakis\stm32f1xx_hal_msp.o"
+"bakis\stm32f1xx_hal_gpio_ex.o"
+"bakis\stm32f1xx_hal_tim.o"
+"bakis\stm32f1xx_hal_tim_ex.o"
+"bakis\stm32f1xx_hal.o"
+"bakis\stm32f1xx_hal_rcc.o"
+"bakis\stm32f1xx_hal_rcc_ex.o"
+"bakis\stm32f1xx_hal_gpio.o"
+"bakis\stm32f1xx_hal_dma.o"
+"bakis\stm32f1xx_hal_cortex.o"
+"bakis\stm32f1xx_hal_pwr.o"
+"bakis\stm32f1xx_hal_flash.o"
+"bakis\stm32f1xx_hal_flash_ex.o"
+"bakis\stm32f1xx_hal_exti.o"
+"bakis\system_stm32f1xx.o"
+--strict --scatter "Bakis\Bakis.sct"
+--summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
+--info sizes --info totals --info unused --info veneers
+--list "Bakis.map" -o Bakis\Bakis.axf
